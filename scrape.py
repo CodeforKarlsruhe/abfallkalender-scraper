@@ -11,6 +11,7 @@ from __future__ import (absolute_import, division, print_function,
 import datetime
 import itertools
 import os.path
+from pprint import pprint
 import re
 
 import bs4
@@ -27,19 +28,30 @@ _RE_FLAGS = re.UNICODE
 _RETRIES_PER_STREET = 3
 
 
-def extract_date(s):
+def _remove_bracketed_substrings(s):
     '''
-    Extract the first thing that looks like a (German) date.
+    Remove substrings in brackets.
 
-    Raises ``ValueError`` if no valid date is found.
+    Removes any substrings in brackets (``()``), including the brackets.
+    Nested brackets are not supported.
     '''
+    return re.sub(r'\(.*?\)', '', s)
+
+
+def _extract_dates(s):
+    '''
+    Extract everything that looks like a German date from a string.
+
+    Returns a list of ``datetime.date`` instances.
+    '''
+    dates = []
     for candidate in _DATE_RE.finditer(s):
         groups = map(int, candidate.groups())
         try:
-            return datetime.date(groups[2], groups[1], groups[0])
+            dates.append(datetime.date(groups[2], groups[1], groups[0]))
         except ValueError:
             pass
-    raise ValueError('Did not find a valid date in {!r}.'.format(s))
+    return dates
 
 
 def soup_from_url(url, **kwargs):
@@ -58,11 +70,16 @@ def _get_street_list():
 
 
 def _scrape_street(street):
+    dates = {}
     soup = soup_from_url(_BASE_URL, params={'strasse': street})
-    td = soup.find('td', string='Sperrmüllabholung')
-    if not td:
-        raise ValueError('Unknown page format')
-    return extract_date(td.next_sibling.text)
+    for title in ['Restmüll, 14-täglich', 'Bioabfall, wöchentlich',
+                  'Wertstoff, 14-täglich', 'Papier, 4-wöchentlich',
+                  'Sperrmüllabholung']:
+        td = soup.find('td', string=title)
+        if td:
+            text = _remove_bracketed_substrings(td.next_sibling.text)
+            dates[title] = _extract_dates(text)
+    return dates
 
 
 def _parse_house_number(number):
@@ -93,6 +110,11 @@ def _parse_street(street):
     return name, numbers
 
 
+def _save_data(data):
+    with open('data.json', 'w') as f:
+        json.dump(data, f)
+
+
 def scrape():
     streets = {}
     for street in _get_street_list():
@@ -101,8 +123,9 @@ def scrape():
         data = None
         for _ in range(_RETRIES_PER_STREET):
             try:
-                data = _scrape_street(street).strftime('%Y-%m-%d')
-                print('  {}'.format(data))
+                data = {k: [d.strftime('%Y-%m-%d') for d in v] for k, v in
+                            _scrape_street(street).iteritems()}
+                pprint(data)
             except ValueError:
                 print('  NO DATE')
             except requests.ConnectionError:
@@ -110,6 +133,7 @@ def scrape():
                 continue
             break
         streets.setdefault(name, []).append([numbers, data])
+        _save_data(streets)  # Save continuously to allow early interruption
     for value in streets.itervalues():
         value.sort()
     return streets
@@ -170,11 +194,20 @@ def find_address(data, name, number):
 
 
 if __name__ == '__main__':
+    import errno
     import io
     import json
 
-    with io.open('data.json', 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    try:
+        with io.open('data.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        print('Loaded {} items'.format(len(data)))
+    except IOError as e:
+        if e.errno != errno.ENOENT:
+            raise
+        print('No stored data, scraping...')
+        data = scrape()
+
     data = {normalize_street_name(key): value
             for key, value in data.iteritems()}
 

@@ -1,5 +1,7 @@
 /venv/
 
+/data.json
+
 .*.swp
 *.pyc
 
