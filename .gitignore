@@ -1,6 +1,8 @@
 /venv/
 
 /data.json
+/services.csv
+/dates.csv
 
 .*.swp
 *.pyc

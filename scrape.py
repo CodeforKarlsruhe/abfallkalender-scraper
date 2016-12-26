@@ -8,6 +8,7 @@ Scrape garbage collection dates for Karlsruhe.
 from __future__ import (absolute_import, division, print_function,
                         unicode_literals)
 
+import csv
 import datetime
 import itertools
 import os.path
@@ -26,6 +27,15 @@ _DATE_RE = re.compile(r'\b(\d\d?)\.(\d\d?).(\d\d\d\d)\b')
 _RE_FLAGS = re.UNICODE
 
 _RETRIES_PER_STREET = 3
+
+
+_SERVICES = {
+    'ka-rest-14': 'Restmüll (14-täglich)',
+    'ka-bio-7': 'Biomüll (wöchentlich)',
+    'ka-wert-14': 'Wertstoff (14-täglich)',
+    'ka-papier-28': 'Altpapier (4-wöchentlich)',
+    'ka-sperr-365': 'Sperrmüll',
+}
 
 
 def _remove_bracketed_substrings(s):
@@ -72,13 +82,17 @@ def _get_street_list():
 def _scrape_street(street):
     dates = {}
     soup = soup_from_url(_BASE_URL, params={'strasse': street})
-    for title in ['Restmüll, 14-täglich', 'Bioabfall, wöchentlich',
-                  'Wertstoff, 14-täglich', 'Papier, 4-wöchentlich',
-                  'Sperrmüllabholung']:
+    for key, title in [
+        ('ka-rest-14', 'Restmüll, 14-täglich'),
+        ('ka-bio-7', 'Bioabfall, wöchentlich'),
+        ('ka-wert-14', 'Wertstoff, 14-täglich'),
+        ('ka-papier-28', 'Papier, 4-wöchentlich'),
+        ('ka-sperr-356', 'Sperrmüllabholung'),
+    ]:
         td = soup.find('td', string=title)
         if td:
             text = _remove_bracketed_substrings(td.next_sibling.text)
-            dates[title] = _extract_dates(text)
+            dates[key] = _extract_dates(text)
     return dates
 
 
@@ -98,6 +112,13 @@ def _parse_house_number(number):
     maps = [lambda x: x.upper(), int]
     return [maps[x[0]](''.join(x[1])) for x in
             itertools.groupby(number, key=unicode.isdigit)]
+
+
+def _unparse_house_number(number):
+    '''
+    Convert a house number to a string.
+    '''
+    return ''.join(unicode(x) for x in number)
 
 
 def _parse_street(street):
@@ -193,6 +214,34 @@ def find_address(data, name, number):
     raise UnknownHouseNumberException()
 
 
+def csv_export(data):
+    '''
+    Export data to CSV files.
+    '''
+    csv_opts = {'delimiter': b',', 'quoting': csv.QUOTE_NONNUMERIC}
+    with open('services.csv', 'wb') as f:
+        writer = csv.writer(f, **csv_opts)
+        for id, title in _SERVICES.iteritems():
+            writer.writerow([id.encode('utf-8'), title.encode('utf-8')])
+    with open('dates.csv', 'wb') as f:
+        writer = csv.writer(f, **csv_opts)
+        for street, servicedates in data.iteritems():
+            street = street.encode('utf-8')
+            for numbers, services in servicedates:
+                if numbers is None:
+                    numbers = [['0'], ['0']]
+                if len(numbers) == 1:
+                    numbers = [numbers[0], numbers[0]]
+                numbers = [['0'] if x == ['~'] else x for x in numbers]
+                numbers = [_unparse_house_number(x) for x in numbers]
+                for service, dates in services.iteritems():
+                    service = service.encode('utf-8')
+                    for date in dates:
+                        # FIXME: Use real postal code
+                        writer.writerow(['123456', street, numbers[0],
+                                         numbers[1], service, date])
+
+
 if __name__ == '__main__':
     import errno
     import io
@@ -210,6 +259,8 @@ if __name__ == '__main__':
 
     data = {normalize_street_name(key): value
             for key, value in data.iteritems()}
+
+    csv_export(data)
 
     name = 'Akademiestr'
     number = '26 a'
