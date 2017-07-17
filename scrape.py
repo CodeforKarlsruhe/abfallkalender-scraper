@@ -12,7 +12,6 @@ import csv
 import datetime
 import itertools
 import os.path
-from pprint import pprint
 import re
 
 import bs4
@@ -131,30 +130,23 @@ def _parse_street(street):
     return name, numbers
 
 
-def _save_data(data):
-    with open('data.json', 'w') as f:
-        json.dump(data, f)
-
-
 def scrape():
     streets = {}
     for street in _get_street_list():
         name, numbers = _parse_street(street)
-        print(street, name, numbers)
+        print(street)
         data = None
         for _ in range(_RETRIES_PER_STREET):
             try:
                 data = {k: [d.strftime('%Y-%m-%d') for d in v] for k, v in
                             _scrape_street(street).iteritems()}
-                pprint(data)
             except ValueError:
-                print('  NO DATE')
+                # No date
+                pass
             except requests.ConnectionError:
-                print('  CONNECTION ERROR')
                 continue
             break
         streets.setdefault(name, []).append([numbers, data])
-        _save_data(streets)  # Save continuously to allow early interruption
     for value in streets.itervalues():
         value.sort()
     return streets
@@ -165,53 +157,6 @@ def normalize_street_name(name):
     name = re.sub(r'str\b', 'strasse', name, flags=_RE_FLAGS)
     name = re.sub(r'[^\w]', '', name, flags=_RE_FLAGS)
     return name
-
-
-def _house_number_in_range(number, range):
-    '''
-    ``number`` is a parsed house number as returned by
-    ``_parse_house_number``. ``range`` can be ``None``, a 1-tuple, or a
-    2-tuple. A range of ``None`` matches all house numbers. A 1-tuple
-    ``(x,)`` matches only ``x``. A 2-tuple ``(x, y)`` matches a number
-    if it is between ``x`` and ``y`` (inclusively) and of the same
-    parity as ``x`` (if ``x[0]`` and ``number[0]`` are either both even
-    or both odd).
-    '''
-    if range is None:
-        return True
-    if len(range) == 1:
-        return range[0] == number
-    if (number[0] % 2) != (range[0][0] % 2):
-        return False
-    return (range[0] <= number) and (number <= range[1])
-
-
-class CustomException(Exception): pass
-class UnknownStreetException(CustomException): pass
-class UnknownHouseNumberException(CustomException): pass
-
-
-def find_address(data, name, number):
-    '''
-    ``data`` maps normalized street names to range lists. ``name`` is a
-    street name and doesn't need to be normalized. ``number`` is a house
-    number as a string.
-
-    Returns the available data for the address.
-    '''
-    name = normalize_street_name(name)
-    parsed_number = _parse_house_number(number)
-    try:
-        street_data = data[name]
-    except KeyError:
-        raise UnknownStreetException()
-    for range, range_data  in street_data:
-        if _house_number_in_range(parsed_number, range):
-            print('{} is in {}'.format(parsed_number, range))
-            return range_data
-        else:
-            print('{} is NOT in {}'.format(parsed_number, range))
-    raise UnknownHouseNumberException()
 
 
 def csv_export(data):
@@ -237,39 +182,17 @@ def csv_export(data):
                 for service, dates in services.iteritems():
                     service = service.encode('utf-8')
                     for date in dates:
-                        # FIXME: Use real postal code
-                        writer.writerow(['123456', street, numbers[0],
+                        writer.writerow(['Karlsruhe', street, numbers[0],
                                          numbers[1], service, date])
 
 
 if __name__ == '__main__':
     import errno
-    import io
     import json
 
-    try:
-        with io.open('data.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        print('Loaded {} items'.format(len(data)))
-    except IOError as e:
-        if e.errno != errno.ENOENT:
-            raise
-        print('No stored data, scraping...')
-        data = scrape()
-
+    data = scrape()
     data = {normalize_street_name(key): value
             for key, value in data.iteritems()}
 
     csv_export(data)
-
-    name = 'Akademiestr'
-    number = '26 a'
-
-    print('{} {}'.format(name, number))
-    try:
-        print(find_address(data, name, number))
-    except UnknownStreetException:
-        print('ERROR: Unknown street')
-    except UnknownHouseNumberException:
-        print('ERROR: Unknown house number')
 
